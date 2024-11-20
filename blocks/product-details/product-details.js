@@ -1,32 +1,35 @@
-/* eslint-disable import/no-unresolved */
-/* eslint-disable import/no-extraneous-dependencies */
 import { events } from '@dropins/tools/event-bus.js';
-import { initializers } from '@dropins/tools/initializer.js';
-import * as productApi from '@dropins/storefront-pdp/api.js';
+import {
+  InLineAlert,
+  Icon,
+  provider as UI,
+} from '@dropins/tools/components.js';
 import { render as productRenderer } from '@dropins/storefront-pdp/render.js';
+import { addProductsToCart } from '@dropins/storefront-cart/api.js';
 import ProductDetails from '@dropins/storefront-pdp/containers/ProductDetails.js';
 
 // Libs
 import {
-  getProduct,
   getSkuFromUrl,
   setJsonLd,
   loadErrorPage, performCatalogServiceQuery, variantsQuery,
 } from '../../scripts/commerce.js';
-import { getConfigValue } from '../../scripts/configs.js';
-import { fetchPlaceholders } from '../../scripts/aem.js';
 
-async function addToCart({
-  sku, quantity, optionsUIDs, product,
-}) {
-  const { cartApi } = await import('../../../scripts/minicart/api.js');
-
-  return cartApi.addToCart(sku, optionsUIDs, quantity, product);
-}
+// Initializers
+import '../../scripts/initializers/cart.js';
+import '../../scripts/initializers/pdp.js';
 
 async function setJsonLdProduct(product) {
   const {
-    name, inStock, description, sku, urlKey, price, priceRange, images, attributes,
+    name,
+    inStock,
+    description,
+    sku,
+    urlKey,
+    price,
+    priceRange,
+    images,
+    attributes,
   } = product;
   const amount = priceRange?.minimum?.final?.amount || price?.final?.amount;
   const brand = attributes.find((attr) => attr.name === 'brand');
@@ -103,7 +106,8 @@ function setMetaTags(product) {
   }
 
   const price = product.priceRange
-    ? product.priceRange.minimum.final.amount : product.price.final.amount;
+    ? product.priceRange.minimum.final.amount
+    : product.price.final.amount;
 
   createMetaTag('title', product.metaTitle || product.name, 'name');
   createMetaTag('description', product.metaDescription, 'name');
@@ -122,135 +126,119 @@ function setMetaTags(product) {
 }
 
 export default async function decorate(block) {
-  if (!window.getProductPromise) {
-    window.getProductPromise = getProduct(this.props.sku);
-  }
-
-  const [product, placeholders] = await Promise.all([
-    window.getProductPromise, fetchPlaceholders()]);
+  const product = await window.getProductPromise;
 
   if (!product) {
     await loadErrorPage();
     return Promise.reject();
   }
 
-  const langDefinitions = {
-    default: {
-      ...placeholders,
+  events.on(
+    'eds/lcp',
+    () => {
+      if (!product) {
+        return;
+      }
+
+      setJsonLdProduct(product);
+      setMetaTags(product);
+      document.title = product.name;
     },
-  };
+    { eager: true },
+  );
 
-  const models = {
-    ProductDetails: {
-      initialData: { ...product },
-    },
-  };
+  // Alert Message Wrapper
+  const alertWrapper = document.createElement('div');
+  alertWrapper.classList.add('product-details__alert');
+  block.appendChild(alertWrapper);
+  let inlineAlert;
 
-  // Initialize Dropins
-  initializers.register(productApi.initialize, {
-    langDefinitions,
-    models,
-  });
-
-  // Set Fetch Endpoint (Service)
-  productApi.setEndpoint(await getConfigValue('commerce-endpoint'));
-
-  // Set Fetch Headers (Service)
-  productApi.setFetchGraphQlHeaders({
-    'Content-Type': 'application/json',
-    'Magento-Environment-Id': await getConfigValue('commerce-environment-id'),
-    'Magento-Website-Code': await getConfigValue('commerce-website-code'),
-    'Magento-Store-View-Code': await getConfigValue('commerce-store-view-code'),
-    'Magento-Store-Code': await getConfigValue('commerce-store-code'),
-    'Magento-Customer-Group': await getConfigValue('commerce-customer-group'),
-    'x-api-key': await getConfigValue('commerce-x-api-key'),
-  });
-
-  events.on('eds/lcp', () => {
-    if (!product) {
-      return;
-    }
-
-    setJsonLdProduct(product);
-    setMetaTags(product);
-    document.title = product.name;
-  }, { eager: true });
+  // PDP Wrapper
+  const pdpWrapper = document.createElement('div');
+  block.appendChild(pdpWrapper);
 
   // Render Containers
-  return new Promise((resolve) => {
-    setTimeout(async () => {
-      try {
-        await productRenderer.render(ProductDetails, {
-          sku: getSkuFromUrl(),
-          carousel: {
-            controls: {
-              desktop: 'thumbnailsColumn',
-              mobile: 'thumbnailsRow',
-            },
-            arrowsOnMainImage: true,
-            peak: {
-              mobile: true,
-              desktop: false,
-            },
-            gap: 'small',
-          },
-          slots: {
-            Actions: (ctx) => {
-              // Add to Cart Button
-              ctx.appendButton((next, state) => {
-                const adding = state.get('adding');
-                return {
-                  text: adding
-                    ? next.dictionary.Custom.AddingToCart?.label
-                    : next.dictionary.PDP.Product.AddToCart?.label,
-                  icon: 'Cart',
-                  variant: 'primary',
-                  disabled: adding || !next.data?.inStock || !next.valid,
-                  onClick: async () => {
-                    try {
-                      state.set('adding', true);
-                      await addToCart({
-                        sku: next.values?.sku,
-                        quantity: next.values?.quantity,
-                        optionsUIDs: next.values?.optionsUIDs,
-                        product: next.data,
-                      });
-                    } catch (error) {
-                      console.error('Could not add to cart: ', error);
-                    } finally {
-                      state.set('adding', false);
-                    }
-                  },
-                };
-              });
+  try {
+    return await productRenderer.render(ProductDetails, {
+      sku: getSkuFromUrl(),
+      carousel: {
+        controls: {
+          desktop: 'thumbnailsColumn',
+          mobile: 'thumbnailsRow',
+        },
+        arrowsOnMainImage: true,
+        peak: {
+          mobile: true,
+          desktop: false,
+        },
+        gap: 'small',
+      },
+      slots: {
+        Actions: (ctx) => {
+          // Add to Cart Button
+          ctx.appendButton((next, state) => {
+            const adding = state.get('addingCart');
+            return {
+              text: adding
+                ? next.dictionary.Custom.AddingToCart?.label
+                : next.dictionary.PDP.Product.AddToCart?.label,
+              icon: 'Cart',
+              variant: 'primary',
+              disabled: adding || !next.data?.inStock || !next.valid,
+              onClick: async () => {
+                try {
+                  state.set('addingCart', true);
+                  await addProductsToCart([{ ...next.values }]);
+                  // reset any previous alerts if successful
+                  inlineAlert?.remove();
+                } catch (error) {
+                  // add alert message
+                  inlineAlert = await UI.render(InLineAlert, {
+                    heading: 'Error',
+                    description: error.message,
+                    icon: Icon({ source: 'Warning' }),
+                    'aria-live': 'assertive',
+                    role: 'alert',
+                    onDismiss: () => {
+                      inlineAlert.remove();
+                    },
+                  })(alertWrapper);
+                  // Scroll the alertWrapper into view
+                  alertWrapper.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center',
+                  });
+                } finally {
+                  state.set('addingCart', false);
+                }
+              },
+            };
+          });
 
-              ctx.appendButton((next, state) => {
-                const adding = state.get('adding');
-                return ({
-                  disabled: adding,
-                  icon: 'Heart',
-                  variant: 'secondary',
-                  onClick: async () => {
-                    try {
-                      state.set('adding', true);
-                      const { addToWishlist } = await import('../../scripts/wishlist/api.js');
-                      await addToWishlist(next.values.sku);
-                    } finally {
-                      state.set('adding', false);
-                    }
-                  },
-                });
-              });
-            },
-          },
-          useACDL: true,
-        })(block);
-      } catch (e) {
-        console.error(e);
-        await loadErrorPage();
-      } finally {
-        resolve();
-      }
-    }, 0);
-  });
+          ctx.appendButton((next, state) => {
+            const adding = state.get('addingWishlist');
+            return ({
+              disabled: adding,
+              icon: 'Heart',
+              variant: 'secondary',
+              onClick: async () => {
+                try {
+                  state.set('addingWishlist', true);
+                  const { addToWishlist } = await import('../../scripts/wishlist/api.js');
+                  await addToWishlist(next.values.sku);
+                } finally {
+                  state.set('addingWishlist', false);
+                }
+              },
+            });
+          });
+        },
+      },
+      useACDL: true,
+    })(pdpWrapper);
+  } catch (e) {
+    console.error(e);
+    await loadErrorPage();
+  }
+  return undefined;
 }
