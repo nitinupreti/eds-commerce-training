@@ -5,8 +5,8 @@ This project boilerplate is for Edge Delivery Services projects that integrate w
 https://experienceleague.adobe.com/developer/commerce/storefront/
 
 ## Environments
-- Preview: https://main--{repo}--{owner}.aem.page/
-- Live: https://main--{repo}--{owner}.aem.live/
+- Preview: https://main--eds-commerce-training--nitinupreti.aem.page/
+- Live: https://main--eds-commerce-training--nitinupreti.aem.live/
 
 ## Pre-requisites
 
